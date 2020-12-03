@@ -10,6 +10,7 @@ import (
 
 /*
 type fields struct {
+	IssueID
 	Assignee
 	Reporter
 	Priority
@@ -55,6 +56,7 @@ func basicAuth() {
 	json.Unmarshal([]byte(s), &m3)
 	json.Unmarshal([]byte(s), &m4)
 	json.Unmarshal([]byte(s), &m5)
+	fmt.Println("Issue: ", m1["key"])
 	fmt.Println("Assignee: ", m3["fields"]["assignee"]["displayName"])
 	fmt.Println("Reporter: ", m3["fields"]["reporter"]["displayName"])
 	fmt.Println("Priority: ", m3["fields"]["priority"]["id"])

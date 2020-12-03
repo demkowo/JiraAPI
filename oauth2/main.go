@@ -18,16 +18,6 @@ type errorRepo struct {
 	F2 string `json:"error_description"`
 }
 
-// flag for new token creation
-var ret bool = false
-
-// JiraID is a variable to store task nr
-var jid string = ""
-
-//to prevent repetetive actions
-var end string = ""
-var e = &end
-
 // ReqToken is what we get from Jira
 type ReqToken struct {
 	GrantType    string `json:"grant_type"`
@@ -58,34 +48,42 @@ type JiraTask struct {
 	Comments         string
 }
 
+var tpl *template.Template // pointer to templates
+var end bool = false       // flag to make sure that there are no actions when program ends
+var tf bool = false        // flag to check if token is valid
+var tok string = ""        // Bearer token
+var jid string = ""        // JiraID is a variable to store task nr
+var er string = ""         // error info for logs
+
 // credentials
 var cid string = "hPYbH5ghUKk0VTMPnkvwGDSm4B4EGApC"
 var sec string = "ag20pruBTFmntG8s2DnUrlI7ne6vDVvCIfgLsahiVxnoef-GgxONu7vHZhMjem_0"
-var code string = "FTNU1kuZl5OhkTw2"
-
-//piinter to template
-var tpl *template.Template
+var code string = "7BgShwWxONpNYVBx"
+var reft string = "KVBOAdgSDUmhMk-nT5God3O7_AQlfxNB64x0TeI1uiQNL"
 
 func init() {
-	log.Println("wywolano init")
-	log.Println("wgrywanie templatow")
+	//log.Println("wywolano init")
+	//log.Println("wgrywanie templatow")
 	tpl = template.Must(template.ParseGlob("templates/*.gohtml"))
 }
 
 func main() {
 	r := mux.NewRouter()
+	r.NotFoundHandler = http.HandlerFunc(redirect)
 	r.HandleFunc("/", index)
 	r.HandleFunc("/getJiraID", getJiraID).Methods("POST")
 	r.HandleFunc("/getJiraID", redirect).Methods("GET")
-	r.NotFoundHandler = http.HandlerFunc(redirect)
 	http.ListenAndServe(":5000", r)
 }
 
 func redirect(w http.ResponseWriter, r *http.Request) {
 	log.Println("wywolano redirect()")
-	fmt.Println("status:", *e)
-	if *e != "" {
-		log.Println("ale nic sie nie zadzialo")
+
+	e := &end
+
+	fmt.Println("status completed = ", *e)
+	if *e == true {
+		log.Println("No redirect actions, status 'completed' = true")
 		return
 	}
 	log.Println("przekierowanie do main z redirect")
@@ -96,6 +94,28 @@ func index(w http.ResponseWriter, r *http.Request) {
 	log.Println("wywolano index")
 	log.Println("wgrano template dla index")
 	tpl.ExecuteTemplate(w, "index.gohtml", nil)
+
+	// -- ZADANIE NA POZNIEJ -- upewnic sie czy potrzeba kolejkowanie
+
+	//getJiraID starts on demand
+	t := &tok
+	if tok == "" {
+		fmt.Println("token = ", *t)
+		// -- ZADANIE NA POZNIEJ -- upewnic sie czy potrzeba dodac czas dla token zeby sie nie nadpisywaly
+		prepareRequestToken()
+		executeRequestToken()
+		if tok == "" {
+			log.Println("token: ", tok)
+			refreshToken()
+		}
+		prepareRequestData()
+		executeRequestData()
+	} else {
+		fmt.Println("token = ", *t)
+		prepareRequestData()
+		executeRequestData()
+	}
+
 }
 
 func getJiraID(w http.ResponseWriter, r *http.Request) {
@@ -104,24 +124,17 @@ func getJiraID(w http.ResponseWriter, r *http.Request) {
 	id := &jid
 	*id = r.FormValue("taskID")
 
-	rt := &ret
+	fmt.Println("jid = ", jid)
 
-	fmt.Println("jid: ", jid)
-	log.Println("przekierowanie do index z getJiraID")
-	if *rt != false {
-		requestToken()
-	} else {
-		requestData()
-	}
+	log.Println("wywolano http.Redirect z getJiraID")
 	http.Redirect(w, r, "/", http.StatusSeeOther)
-
 }
 
-func requestToken() {
+func prepareRequestToken() {
 	log.Println("wywolano curl - request token")
 
 	//data for curl script
-	text := "#!/bin/bash \n\n curl --request POST --url 'https://auth.atlassian.com/oauth/token' --header 'Content-Type: application/json' --data '{\"grant_type\": \"authorization_code\",\"client_id\": \"hPYbH5ghUKk0VTMPnkvwGDSm4B4EGApC\",\"client_secret\": \"ag20pruBTFmntG8s2DnUrlI7ne6vDVvCIfgLsahiVxnoef-GgxONu7vHZhMjem_0\",\"code\": \"" + code + "\",\"redirect_uri\": \"https://localhost\"}'"
+	text := "#!/bin/bash \n\ncurl --request POST --url 'https://auth.atlassian.com/oauth/token' --header 'Content-Type: application/json' --data '{\"grant_type\": \"authorization_code\",\"client_id\": \"hPYbH5ghUKk0VTMPnkvwGDSm4B4EGApC\",\"client_secret\": \"ag20pruBTFmntG8s2DnUrlI7ne6vDVvCIfgLsahiVxnoef-GgxONu7vHZhMjem_0\",\"code\": \"" + code + "\",\"redirect_uri\": \"https://localhost\"}'"
 
 	//creating curl script
 	fmt.Println("\n\ntext: ", text, "\n\n ")
@@ -130,50 +143,101 @@ func requestToken() {
 	if err != nil {
 		fmt.Printf("Unable to write file: %v", err)
 	}
+}
 
+func executeRequestToken() {
+	log.Println("wywolano execute request token")
+
+	e := &er
 	//executing curl script
 	out, err := exec.Command("/bin/sh", "./command.sh").Output()
 	if err != nil {
-		log.Fatal("Error with bash: ", err)
+		log.Fatal("Error with bash command.sh: ", err)
 		return
 	}
+
 	s := string(out)
-	fmt.Println("s: ", s)
-	data := AccToken{}
-	de := errorRepo{}
-	json.Unmarshal([]byte(s), &data)
-	dataAct := string(data.Act)
-	fmt.Println("data: ", dataAct)
+	*e = s
 
-	//verification if aythorization code is still valid
-	if len(dataAct) < 20 {
-		log.Println("Error: not enough data", len(dataAct), &de)
-		json.Unmarshal([]byte(s), &de)
-		log.Println("Error: ", &de)
+	// when everything is fine
+	data := AccToken{}
+	json.Unmarshal([]byte(s), &data)
+
+	//authorization varification (if user code is valid)
+	if len(*e) < 80 {
+		log.Println("ERROR exReqT, can't get authorization token", er)
+	} else {
+		fmt.Println("token:", er)
+	}
+
+	t := &tok
+	*t = data.Act
+	return
+}
+
+func refreshToken() {
+	//======================== prepare
+	log.Println("wywolano refresh token")
+
+	//data for curl script
+	text := "#!/bin/bash \n\ncurl --request POST --url 'https://auth.atlassian.com/oauth/token' --header 'Content-Type: application/json' --data '{ \"grant_type\": \"refresh_token\", \"client_id\": \"" + cid + "\", \"client_secret\": \"" + sec + "\", \"refresh_token\": \"" + reft + "\" }'"
+
+	//creating curl script
+	fmt.Println("\n\ntext: ", text, "\n\n ")
+	err := ioutil.WriteFile("command3.sh", []byte(text), 0755)
+
+	if err != nil {
+		fmt.Printf("Unable to write file: %v", err)
+	}
+	//======================== execute
+	log.Println("wywolano refresh token - execute")
+
+	e := &er
+	//executing curl script
+	out, err := exec.Command("/bin/sh", "./command3.sh").Output()
+	if err != nil {
+		log.Fatal("Error with bash command.sh: ", err)
 		return
 	}
 
+	s := string(out)
+	*e = s
+
+	// when everything is fine
+	data := AccToken{}
+	json.Unmarshal([]byte(s), &data)
+
+	//authorization varification (if user code is valid)
+	if len(*e) < 80 {
+		log.Println("ERROR exReqT, can't get refresh token", er)
+	} else {
+		fmt.Println("refreshed token:", er)
+	}
+
+	t := &tok
+	*t = data.Act
+	return
+}
+
+func prepareRequestData() {
+	log.Println("wywolano prepareRequestData")
+
+	t := &tok
 	//creating curl script for data request
-	text = "#!/bin/bash \n\ncurl --request GET --url https://projectx-tadw.atlassian.net/rest/api/2/issue/" + jid + " --header 'Authorization: Bearer " + dataAct + "' --header 'Accept: application/json'"
+	text := "#!/bin/bash \n\ncurl --request GET --url https://projectx-tadw.atlassian.net/rest/api/2/issue/" + jid + " --header 'Authorization: Bearer " + *t + "' --header 'Accept: application/json'"
 	//text := "#!/bin/bash \n\ncurl --request GET --url https://projectx-tadw.atlassian.net/rest/api/2/issue/" + jid + " --header 'Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6Ik16bERNemsxTVRoRlFVRTJRa0ZGT0VGRk9URkJOREJDTVRRek5EZzJSRVpDT1VKRFJrVXdNZyJ9.eyJodHRwczovL2F0bGFzc2lhbi5jb20vb2F1dGhDbGllbnRJZCI6ImhQWWJINWdoVUtrMFZUTVBua3Z3R0RTbTRCNEVHQXBDIiwiaHR0cHM6Ly9hdGxhc3NpYW4uY29tL2VtYWlsRG9tYWluIjoiZ21haWwuY29tIiwiaHR0cHM6Ly9hdGxhc3NpYW4uY29tL3N5c3RlbUFjY291bnRJZCI6IjVmYmQ1ZTI4ZjJkZjZjMDA3NjhhMzRlZSIsImh0dHBzOi8vYXRsYXNzaWFuLmNvbS9zeXN0ZW1BY2NvdW50RW1haWxEb21haW4iOiJjb25uZWN0LmF0bGFzc2lhbi5jb20iLCJodHRwczovL2F0bGFzc2lhbi5jb20vdmVyaWZpZWQiOnRydWUsImh0dHBzOi8vYXRsYXNzaWFuLmNvbS9maXJzdFBhcnR5IjpmYWxzZSwiaHR0cHM6Ly9hdGxhc3NpYW4uY29tLzNsbyI6dHJ1ZSwiaXNzIjoiaHR0cHM6Ly9hdGxhc3NpYW4tYWNjb3VudC1wcm9kLnB1czIuYXV0aDAuY29tLyIsInN1YiI6ImF1dGgwfDVmNzc4ZTFmNGQwOWY3MDA3NmZiNzdhZCIsImF1ZCI6ImFwaS5hdGxhc3NpYW4uY29tIiwiaWF0IjoxNjA2NjEwMTU0LCJleHAiOjE2MDY2MTM3NTQsImF6cCI6ImhQWWJINWdoVUtrMFZUTVBua3Z3R0RTbTRCNEVHQXBDIiwic2NvcGUiOiJyZWFkOmppcmEtd29yayByZWFkOmppcmEtdXNlciJ9.h7SyZ3erOqPd10okB3CYrH0b8Fx2m25J_J-h5WBVfZ84x8lunXQlOIad7ba4XYTRpBkMyldOZ8WcGGSHaNhXgT80K13EWgoEfUeD0vtAzMs8Kk1IXo1yax-uRef9G4nMFGPLAsadYWhPCCVV_YKD5aKJ7Xyx1nFNvLe51Pb8lVJJMj-jnxpJOGAa2VpBXD57Z80iC0pWt-Rnpf4hykYrEYVEa1B7VZRkd9Uu79JlsfkEF7eBlGVw2EXRbAIgxg5nK0uNoEwlboZ5BXSpJx3SLDrwrCpvemKQ1HJA_oAhN2JivbqoJKhYHR_NCHxIqA95WMChLo7hH7Ohu69Hf0wLDQ' --header 'Accept: application/json'"
 	fmt.Println("\n\ntext: ", text, "\n\n ")
 
-	err = ioutil.WriteFile("command2.sh", []byte(text), 0755)
+	err := ioutil.WriteFile("command2.sh", []byte(text), 0755)
 
 	if err != nil {
 		fmt.Printf("Unable to write file: %v", err)
 	}
 
-	//requestData()
+	return
 }
 
-func requestData() {
-	var m1 map[string]string
-	var m2 map[string]map[string]string
-	var m3 map[string]map[string]map[string]string
-	var m4 map[string]map[string]map[string]map[string]string
-	var m5 map[string]map[string]map[string]map[string]map[string]string
-
+func executeRequestData() {
 	log.Println("wywolano curl - request data")
 
 	out, err := exec.Command("/bin/sh", "./command2.sh").Output()
@@ -185,7 +249,7 @@ func requestData() {
 	fmt.Println("s: ", s)
 	if s == `{"errorMessages":["Issue does not exist or you do not have permission to see it."],"errors":{}}` {
 		fmt.Println("mozna wywolac pobranie tokenu")
-		requestToken()
+		//////////////wyslac info ze trzeba pobrac token
 
 		out, err := exec.Command("/bin/sh", "./command2.sh").Output()
 		if err != nil {
@@ -195,12 +259,19 @@ func requestData() {
 		s := string(out)
 		fmt.Println("s: ", s)
 	}
+	var m1 map[string]string
+	var m2 map[string]map[string]string
+	var m3 map[string]map[string]map[string]string
+	var m4 map[string]map[string]map[string]map[string]string
+	var m5 map[string]map[string]map[string]map[string]map[string]string
+
 	json.Unmarshal([]byte(s), &m1)
 	json.Unmarshal([]byte(s), &m2)
 	json.Unmarshal([]byte(s), &m3)
 	json.Unmarshal([]byte(s), &m4)
 	json.Unmarshal([]byte(s), &m5)
 	fmt.Println("")
+	fmt.Println("Issue: ", m1["key"])
 	fmt.Println("Assignee: ", m3["fields"]["assignee"]["displayName"])
 	fmt.Println("Reporter: ", m3["fields"]["reporter"]["displayName"])
 	fmt.Println("Priority: ", m3["fields"]["priority"]["id"])
@@ -210,6 +281,8 @@ func requestData() {
 	fmt.Println("ShortDescription: ", m2["fields"]["summary"])
 	fmt.Println("Status: ", m3["fields"]["status"]["name"])
 	fmt.Println("")
-	*e = "done"
+	e := &end
+	*e = true
 	log.Println("===========  zakonczono ===========")
+	return
 }
